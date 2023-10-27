@@ -2,7 +2,7 @@ import os
 import logging
 from importlib.machinery import SourceFileLoader
 from setuptools import setup, find_packages, Command
-
+import warnings
 _MLFLOW_SKINNY_ENV_VAR = "MLFLOW_SKINNY"
 
 version = (
