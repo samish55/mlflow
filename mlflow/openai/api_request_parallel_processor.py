@@ -89,6 +89,7 @@ class APIRequest:
     token_consumption: int
     attempts_left: int
     results: list[tuple[int, OpenAIObject]]
+    timeout: int = 60
 
     def call_api(self, retry_queue: queue.Queue, status_tracker: StatusTracker):
         """
@@ -96,12 +97,12 @@ class APIRequest:
         """
         _logger.debug(f"Request #{self.index} started")
         try:
-            response = self.task.create(**self.request_json)
+            response = self.task.create(**self.request_json, timeout=self.timeout)
             _logger.debug(f"Request #{self.index} succeeded")
             status_tracker.complete_task(success=True)
             self.results.append((self.index, response))
         except openai.error.RateLimitError as e:
-            _logger.warning(f"Request #{self.index} failed with {e!r}")
+            _logger.debug(f"Request #{self.index} failed with {e!r}")
             status_tracker.time_of_last_rate_limit_error = time.time()
             status_tracker.increment_num_rate_limit_errors()
             retry_queue.put_nowait(self)
@@ -112,7 +113,7 @@ class APIRequest:
             openai.error.APIConnectionError,
             openai.error.ServiceUnavailableError,
         ) as e:
-            _logger.warning(f"Request #{self.index} failed with {e!r}")
+            _logger.debug(f"Request #{self.index} failed with {e!r}")
             status_tracker.increment_num_api_errors()
             if self.attempts_left > 0:
                 retry_queue.put_nowait(self)
@@ -122,14 +123,18 @@ class APIRequest:
         except openai.error.InvalidRequestError as e:
             if e.error.code == "content_filter" and e.error.innererror:
                 content_filter_result = e.error.innererror.content_filter_result
-                _logger.warning(
+                _logger.debug(
                     f"Request #{self.index} failed because of content filtering: "
                     f"{content_filter_result}"
                 )
                 status_tracker.increment_num_api_errors()
                 status_tracker.complete_task(success=False)
+            else:
+                _logger.warning(f"Request #{self.index} failed with {e!r}")
+                status_tracker.increment_num_api_errors()
+                status_tracker.complete_task(success=False)
         except Exception as e:
-            _logger.warning(f"Request #{self.index} failed with {e!r}")
+            _logger.debug(f"Request #{self.index} failed with {e!r}")
             status_tracker.increment_num_api_errors()
             status_tracker.complete_task(success=False)
 
@@ -223,7 +228,7 @@ def process_api_requests(
             if next_request is None:
                 if not retry_queue.empty():
                     next_request = retry_queue.get_nowait()
-                    _logger.warning(f"Retrying request {next_request.index}: {next_request}")
+                    _logger.debug(f"Retrying request {next_request.index}: {next_request}")
                 elif req := next(requests_iter, None):
                     # get new request
                     index, request_json = req
